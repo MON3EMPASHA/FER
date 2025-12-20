@@ -1,0 +1,109 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+fer2013-cnn.ipynb
+
+# Training Data (too large for GitHub)
+train/
+test/
+
+# Model exports (keep best_model.h5 and saved_model/, exclude others)
+model.tflite
+train_history.pkl
+export_model.py
+train_model.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Documentation files (exclude detailed guides, keep README.md)
+*.docx
+Cloud_Computing_Project_Description*.docx
+DOCKER_BEGINNER_GUIDE.md
+DOCKER_BUILD_EXPLAINED.md
+DOCKER_BUILD_OPTIMIZATION.md
+DOCKER_TROUBLESHOOTING.md
+ENABLE_KUBERNETES.md
+KUBERNETES_SETUP.md
+KUBERNETES_RESET_TIMING.md
+FIX_KUBERNETES_FAILED.md
+DEPLOYMENT_GUIDE.md
+API_TESTING_GUIDE.md
+DOCUMENTATION_CHECKLIST.md
+PROJECT_DOCUMENTATION.md
+PROJECT_SUMMARY.md
+QUICK_START.md
+
+# Scripts (optional helper scripts, not needed for deployment)
+*.ps1
+*.sh
+deploy_k8s.ps1
+setup_probes.ps1
+setup_hpa.ps1
+k8s_deploy.sh
+k8s_setup_probes.sh
+k8s_setup_hpa.sh
+check-k8s-status.ps1
+fix-k8s-config.ps1
+troubleshoot-k8s-failed.ps1
+
+# Kubernetes secrets (if any)
+*.secret.yaml
+secrets/
+
+
+
+
+
+
+

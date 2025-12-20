@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: fer-api
+  name: fer-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fer-api
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: fer-api
+    spec:
+      containers:
+      - image: mon3empasha/fer-api:latest
+        name: fer-api
+        ports:
+        - containerPort: 8000
+        resources: {}
+        # Health probes will be added via kubectl set probe command
+        # See setup_probes.ps1 or k8s_setup_probes.sh
+status: {}
+
