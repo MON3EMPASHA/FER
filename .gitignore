@@ -46,7 +46,7 @@ test/
 model.tflite
 train_history.pkl
 export_model.py
-train_model.py
+# train_model.py - Now included in repository
 
 # OS
 .DS_Store
