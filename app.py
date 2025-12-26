@@ -17,6 +17,14 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Try to import cv2 for face detection
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    logger.warning("OpenCV not available. Face detection will be skipped.")
+
 # Initialize FastAPI app
 app = FastAPI(
     title="FER-2013 Facial Expression Recognition API",
@@ -114,9 +122,67 @@ async def startup_event():
     """Load model on startup"""
     load_model_instance()
 
+def detect_and_crop_face(image):
+    """
+    Detect and crop face from image using OpenCV
+    Returns cropped face image or original image if face not detected
+    """
+    if not CV2_AVAILABLE:
+        return image
+    
+    try:
+        # Convert PIL image to numpy array (RGB)
+        img_array = np.array(image.convert('RGB'))
+        
+        # Convert RGB to BGR for OpenCV
+        img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        
+        # Convert to grayscale for face detection
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        
+        # Load the face cascade classifier
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        
+        # Detect faces
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(30, 30)
+        )
+        
+        if len(faces) > 0:
+            # Get the largest face (most likely the main subject)
+            face = max(faces, key=lambda rect: rect[2] * rect[3])
+            x, y, w, h = face
+            
+            # Add padding around the face (20% on each side)
+            padding_x = int(w * 0.2)
+            padding_y = int(h * 0.2)
+            
+            x = max(0, x - padding_x)
+            y = max(0, y - padding_y)
+            w = min(img_array.shape[1] - x, w + 2 * padding_x)
+            h = min(img_array.shape[0] - y, h + 2 * padding_y)
+            
+            # Crop the face region
+            cropped = img_array[y:y+h, x:x+w]
+            
+            # Convert back to PIL Image
+            return Image.fromarray(cropped)
+        else:
+            # No face detected, return original image
+            logger.warning("No face detected, using full image")
+            return image
+            
+    except Exception as e:
+        logger.warning(f"Face detection failed: {e}, using full image")
+        return image
+
 def preprocess_image(image_bytes: bytes) -> np.ndarray:
     """
     Preprocess image for model prediction
+    - Detect and crop face if possible
     - Convert to grayscale
     - Resize to 48x48
     - Normalize pixel values to [0, 1]
@@ -124,6 +190,9 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
     try:
         # Open image from bytes
         image = Image.open(io.BytesIO(image_bytes))
+        
+        # Detect and crop face first
+        image = detect_and_crop_face(image)
         
         # Convert to grayscale if needed
         if image.mode != 'L':

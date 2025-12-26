@@ -19,6 +19,14 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Try to import cv2 for face detection
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    logger.warning("OpenCV not available. Face detection will be skipped.")
+
 # Page configuration
 st.set_page_config(
     page_title="FER-2013 Emotion Recognition",
@@ -115,35 +123,173 @@ def load_model_instance():
         logger.error(f"Neither H5 model ({MODEL_PATH}) nor SavedModel ({SAVED_MODEL_PATH}) found!")
         raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
 
-def preprocess_image(image):
+def detect_and_crop_face(image, return_bbox=False):
     """
-    Preprocess image for model prediction
+    Detect and crop face from image using OpenCV
+    Returns tuple: (cropped face image, face_detected boolean, [bbox coordinates if return_bbox=True])
+    bbox format: (x, y, w, h) - bounding box coordinates
+    """
+    if not CV2_AVAILABLE:
+        if return_bbox:
+            return image, False, None
+        return image, False
+    
+    try:
+        # Convert PIL image to numpy array (RGB)
+        img_array = np.array(image.convert('RGB'))
+        
+        # Convert RGB to BGR for OpenCV
+        img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        
+        # Convert to grayscale for face detection
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        
+        # Load the face cascade classifier
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        
+        # Detect faces
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(30, 30)
+        )
+        
+        if len(faces) > 0:
+            # Get the largest face (most likely the main subject)
+            face = max(faces, key=lambda rect: rect[2] * rect[3])
+            x, y, w, h = face
+            
+            # Store original bbox before padding
+            original_bbox = (x, y, w, h)
+            
+            # Add padding around the face (20% on each side)
+            padding_x = int(w * 0.2)
+            padding_y = int(h * 0.2)
+            
+            x_padded = max(0, x - padding_x)
+            y_padded = max(0, y - padding_y)
+            w_padded = min(img_array.shape[1] - x_padded, w + 2 * padding_x)
+            h_padded = min(img_array.shape[0] - y_padded, h + 2 * padding_y)
+            
+            # Crop the face region (with padding)
+            cropped = img_array[y_padded:y_padded+h_padded, x_padded:x_padded+w_padded]
+            
+            # Convert back to PIL Image
+            cropped_image = Image.fromarray(cropped)
+            
+            if return_bbox:
+                # Return bbox with padding
+                return cropped_image, True, (x_padded, y_padded, w_padded, h_padded)
+            return cropped_image, True
+        else:
+            # No face detected, return original image
+            logger.warning("No face detected, using full image")
+            if return_bbox:
+                return image, False, None
+            return image, False
+            
+    except Exception as e:
+        logger.warning(f"Face detection failed: {e}, using full image")
+        if return_bbox:
+            return image, False, None
+        return image, False
+
+def draw_face_bbox(image, bbox):
+    """
+    Draw bounding box around detected face on image
+    Returns image with bounding box drawn
+    """
+    if bbox is None:
+        return image
+    
+    try:
+        # Convert PIL image to numpy array
+        img_array = np.array(image.convert('RGB'))
+        
+        # Convert RGB to BGR for OpenCV
+        img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        
+        x, y, w, h = bbox
+        
+        # Draw rectangle (green, thickness 3)
+        cv2.rectangle(img_bgr, (x, y), (x + w, y + h), (0, 255, 0), 3)
+        
+        # Add label "Face Detected"
+        label = "Face Detected"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.7
+        thickness = 2
+        (text_width, text_height), _ = cv2.getTextSize(label, font, font_scale, thickness)
+        
+        # Draw label background
+        cv2.rectangle(img_bgr, (x, y - text_height - 10), (x + text_width + 10, y), (0, 255, 0), -1)
+        
+        # Draw label text
+        cv2.putText(img_bgr, label, (x + 5, y - 5), font, font_scale, (0, 0, 0), thickness)
+        
+        # Convert back to RGB and PIL Image
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(img_rgb)
+        
+    except Exception as e:
+        logger.error(f"Error drawing bounding box: {e}")
+        return image
+
+def preprocess_image(image, return_face_info=False, return_bbox=False):
+    """
+    Preprocess image for model prediction (matches FastAPI exactly)
+    - Detect and crop face if possible
     - Convert to grayscale
     - Resize to 48x48
     - Normalize pixel values to [0, 1]
+    
+    Args:
+        image: PIL Image
+        return_face_info: If True, also return face detection status
+        return_bbox: If True, also return bounding box coordinates
+    
+    Returns:
+        Preprocessed image array, or tuple with additional info if requested
     """
     try:
-        # Convert to grayscale if needed
+        # Detect and crop face first
+        if return_bbox:
+            image, face_detected, bbox = detect_and_crop_face(image, return_bbox=True)
+        else:
+            image, face_detected = detect_and_crop_face(image)
+            bbox = None
+        
+        # Convert to grayscale if needed (matches FastAPI exactly)
         if image.mode != 'L':
             image = image.convert('L')
         
-        # Resize to 48x48
+        # Resize to 48x48 (matches FastAPI exactly)
         image = image.resize((IMAGE_WIDTH, IMAGE_HEIGHT))
         
-        # Convert to numpy array and normalize
+        # Convert to numpy array and normalize (matches FastAPI exactly)
         img_array = np.array(image, dtype=np.float32) / 255.0
         
         # Reshape to match model input shape: (1, 48, 48, 1)
         img_array = img_array.reshape(1, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
         
+        if return_bbox:
+            return img_array, face_detected, bbox
+        elif return_face_info:
+            return img_array, face_detected
         return img_array
     except Exception as e:
         logger.error(f"Error preprocessing image: {e}")
         raise ValueError(f"Error processing image: {str(e)}")
 
-def predict_emotion(image, model):
+def predict_emotion(image, model, return_bbox=False):
     """Make prediction on preprocessed image"""
-    processed_image = preprocess_image(image)
+    if return_bbox:
+        processed_image, face_detected, bbox = preprocess_image(image, return_face_info=True, return_bbox=True)
+    else:
+        processed_image, face_detected = preprocess_image(image, return_face_info=True)
+        bbox = None
+    
     predictions = model.predict(processed_image, verbose=0)
     
     # Get predicted class index and probability
@@ -157,7 +303,9 @@ def predict_emotion(image, model):
         for i in range(len(CLASS_NAMES))
     }
     
-    return predicted_class, confidence, class_probabilities
+    if return_bbox:
+        return predicted_class, confidence, class_probabilities, face_detected, bbox
+    return predicted_class, confidence, class_probabilities, face_detected
 
 def plot_predictions(class_probabilities):
     """Create a bar chart of emotion predictions"""
@@ -183,29 +331,64 @@ def plot_predictions(class_probabilities):
 
 # Main UI
 def main():
-    # Title and description
-    st.title("😊 Facial Expression Recognition")
-    st.markdown("**Upload an image to detect facial expressions using the FER-2013 model**")
-    st.markdown("---")
+    # Custom CSS for better styling
+    st.markdown("""
+    <style>
+    .main-header {
+        text-align: center;
+        padding: 1rem 0;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-size: 3rem;
+        font-weight: bold;
+        margin-bottom: 0.5rem;
+    }
+    .sub-header {
+        text-align: center;
+        color: #666;
+        margin-bottom: 2rem;
+    }
+    .prediction-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        color: white;
+        text-align: center;
+        margin: 1rem 0;
+    }
+    .emotion-badge {
+        display: inline-block;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.2);
+        margin: 0.5rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Header
+    st.markdown('<h1 class="main-header">😊 Facial Expression Recognition</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Upload an image or use your camera to detect facial expressions</p>', unsafe_allow_html=True)
     
     # Sidebar
     with st.sidebar:
         st.header("📋 About")
         st.markdown("""
         This application uses a deep learning model trained on the FER-2013 dataset 
-        to recognize 7 different facial expressions:
+        to recognize **7 different facial expressions**:
         
-        - 😠 Angry
-        - 🤢 Disgust
-        - 😨 Fear
-        - 😊 Happy
-        - 😐 Neutral
-        - 😢 Sad
-        - 😲 Surprise
+        - 😠 **Angry**
+        - 🤢 **Disgust**
+        - 😨 **Fear**
+        - 😊 **Happy**
+        - 😐 **Neutral**
+        - 😢 **Sad**
+        - 😲 **Surprise**
         """)
         
         st.markdown("---")
-        st.header("⚙️ Model Info")
+        st.header("⚙️ Model Status")
         
         # Check if model files exist
         model_exists = os.path.exists(MODEL_PATH) or (os.path.exists(SAVED_MODEL_PATH) and os.path.isdir(SAVED_MODEL_PATH))
@@ -213,134 +396,195 @@ def main():
         if model_exists:
             st.success("✅ Model file found")
             if os.path.exists(MODEL_PATH):
-                st.info(f"📁 Using: {MODEL_PATH}")
+                st.caption(f"📁 {MODEL_PATH}")
             else:
-                st.info(f"📁 Using: {SAVED_MODEL_PATH}")
+                st.caption(f"📁 {SAVED_MODEL_PATH}")
         else:
             st.error("❌ Model file not found!")
             st.warning(f"Please ensure either {MODEL_PATH} or {SAVED_MODEL_PATH} exists")
     
     # Load model
     try:
-        model = load_model_instance()
-        st.sidebar.success("✅ Model loaded successfully!")
+        with st.spinner("Loading model..."):
+            model = load_model_instance()
+        st.sidebar.success("✅ Model ready!")
     except Exception as e:
         st.error(f"❌ Error loading model: {str(e)}")
         st.stop()
     
-    # Main content area
-    # Add tabs for different input methods
+    # Main content area - Tabs for input methods
     tab1, tab2 = st.tabs(["📤 Upload Image", "📷 Camera"])
     
     image = None
     image_source = None
     
     with tab1:
-        st.subheader("Upload an Image")
+        st.markdown("### Upload an Image File")
+        st.caption("Supported formats: JPG, JPEG, PNG, BMP")
         
-        # File uploader
+        # File uploader with better styling
         uploaded_file = st.file_uploader(
             "Choose an image file",
             type=['jpg', 'jpeg', 'png', 'bmp'],
             help="Upload a facial image for emotion recognition",
-            label_visibility="collapsed"
+            label_visibility="visible"
         )
         
         if uploaded_file is not None:
-            # Display uploaded image
             try:
                 image = Image.open(uploaded_file)
                 image_source = "uploaded"
+                st.success("✅ Image loaded successfully!")
             except Exception as e:
-                st.error(f"Error loading image: {str(e)}")
+                st.error(f"❌ Error loading image: {str(e)}")
                 st.stop()
     
     with tab2:
-        st.subheader("Capture from Camera")
-        st.markdown("**Position your face in front of the camera and click the button to capture**")
+        st.markdown("### Capture from Camera")
+        st.caption("Position your face in front of the camera and click the button to capture")
         
         # Camera input
         camera_image = st.camera_input(
             "Take a picture",
             help="Click the button to capture your face",
-            label_visibility="collapsed"
+            label_visibility="visible"
         )
         
         if camera_image is not None:
             try:
                 image = Image.open(camera_image)
                 image_source = "camera"
+                st.success("✅ Photo captured successfully!")
             except Exception as e:
-                st.error(f"Error processing camera image: {str(e)}")
+                st.error(f"❌ Error processing camera image: {str(e)}")
                 st.stop()
     
-    # Display image and info if available
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        if image is not None:
-            st.subheader("📷 Image Preview")
-            st.image(image, caption=f"{'Uploaded' if image_source == 'uploaded' else 'Camera'} Image", use_container_width=True)
-            
-            # Show image info
-            st.info(f"**Image Size:** {image.size[0]} x {image.size[1]} pixels")
-            st.info(f"**Image Mode:** {image.mode}")
-            st.info(f"**Source:** {'File Upload' if image_source == 'uploaded' else 'Camera'}")
-    
-    with col2:
-        st.subheader("🎯 Prediction Results")
+    # Prediction section - only show if image is available
+    if image is not None:
+        st.markdown("---")
         
+        # Make prediction first (before displaying in columns)
+        predicted_class = None
+        confidence = None
         class_probabilities = None
+        face_detected = False
+        bbox = None
+        image_with_bbox = image
         
-        if image is not None:
-            try:
-                # Make prediction
-                with st.spinner("🔍 Analyzing facial expression..."):
-                    predicted_class, confidence, class_probabilities = predict_emotion(image, model)
+        try:
+            with st.spinner("🔍 Analyzing facial expression..."):
+                predicted_class, confidence, class_probabilities, face_detected, bbox = predict_emotion(image, model, return_bbox=True)
+            
+            # Draw bounding box on image if face was detected
+            if face_detected and bbox is not None and CV2_AVAILABLE:
+                image_with_bbox = draw_face_bbox(image, bbox)
+        except Exception as e:
+            st.error(f"❌ Prediction error: {str(e)}")
+            st.exception(e)
+        
+        # Create two columns for image and prediction
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.markdown("### 📷 Image Preview")
+            
+            # Display image with or without bounding box
+            if face_detected and bbox is not None and CV2_AVAILABLE:
+                st.image(image_with_bbox, use_container_width=True, caption="Face detected (green box)")
+            else:
+                st.image(image, use_container_width=True, caption="Your image")
+            
+            # Compact image info
+            with st.expander("ℹ️ Image Details"):
+                st.write(f"**Size:** {image.size[0]} × {image.size[1]} pixels")
+                st.write(f"**Mode:** {image.mode}")
+                st.write(f"**Source:** {'File Upload' if image_source == 'uploaded' else 'Camera'}")
+                if CV2_AVAILABLE and bbox is not None:
+                    st.write(f"**Face Bounding Box:** x={bbox[0]}, y={bbox[1]}, width={bbox[2]}, height={bbox[3]}")
+        
+        with col2:
+            st.markdown("### 🎯 Prediction Results")
+            
+            if predicted_class is not None:
+                # Face detection status
+                if CV2_AVAILABLE:
+                    if face_detected:
+                        st.success("✅ Face detected and cropped (see green box on image)")
+                    else:
+                        st.warning("⚠️ Face not detected - using full image (accuracy may be lower)")
+                else:
+                    st.info("ℹ️ Face detection not available (OpenCV not installed)")
                 
-                # Display main prediction
+                # Main prediction display with better styling
                 emoji = EMOTION_EMOJIS.get(predicted_class, '😐')
-                st.markdown(f"### {emoji} **{predicted_class.upper()}**")
-                st.markdown(f"**Confidence:** {confidence:.2%}")
                 
-                # Progress bar for confidence
+                # Large prediction card
+                st.markdown(f"""
+                <div class="prediction-card">
+                    <h1 style="font-size: 4rem; margin: 0;">{emoji}</h1>
+                    <h2 style="margin: 0.5rem 0;">{predicted_class.upper()}</h2>
+                    <p style="font-size: 1.2rem; margin: 0;">Confidence: {confidence:.1%}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Confidence progress bar
                 st.progress(confidence)
                 
-                st.markdown("---")
-                
-                # Display all predictions as a table
-                st.subheader("📊 All Predictions")
+                # All predictions in a compact table
+                st.markdown("#### 📊 All Emotion Scores")
                 df = pd.DataFrame({
                     'Emotion': list(class_probabilities.keys()),
                     'Confidence': [f"{v:.2%}" for v in class_probabilities.values()],
                     'Score': list(class_probabilities.values())
                 })
                 df = df.sort_values('Score', ascending=False)
-                df.index = [EMOTION_EMOJIS.get(emotion, '😐') for emotion in df['Emotion']]
-                st.dataframe(df[['Emotion', 'Confidence']], use_container_width=True)
                 
-            except Exception as e:
-                st.error(f"❌ Prediction error: {str(e)}")
-                class_probabilities = None
-        else:
-            st.info("👆 Please upload an image or use the camera to see predictions")
-    
-    # Visualization section
-    if image is not None and class_probabilities is not None:
-        st.markdown("---")
-        st.subheader("📈 Prediction Visualization")
+                # Add emoji column
+                df[''] = [EMOTION_EMOJIS.get(emotion, '😐') for emotion in df['Emotion']]
+                df = df[['', 'Emotion', 'Confidence']]
+                
+                # Style the dataframe
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "": st.column_config.TextColumn("", width="small"),
+                        "Emotion": st.column_config.TextColumn("Emotion", width="medium"),
+                        "Confidence": st.column_config.TextColumn("Confidence", width="small")
+                    }
+                )
+            else:
+                st.warning("⚠️ Unable to make prediction. Please try again.")
         
-        try:
-            fig = plot_predictions(class_probabilities)
-            st.pyplot(fig)
-        except Exception as e:
-            st.error(f"Error creating visualization: {str(e)}")
+        # Visualization section
+        if 'class_probabilities' in locals() and class_probabilities is not None:
+            st.markdown("---")
+            st.markdown("### 📈 Detailed Visualization")
+            
+            try:
+                fig = plot_predictions(class_probabilities)
+                st.pyplot(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error creating visualization: {str(e)}")
+    else:
+        # Welcome message when no image
+        st.markdown("---")
+        st.info("👆 **Get started:** Upload an image file or use your camera to capture a photo above!")
+        
+        # Show example emotions
+        st.markdown("### 🎭 Recognized Emotions")
+        cols = st.columns(7)
+        for i, (emotion, emoji) in enumerate(EMOTION_EMOJIS.items()):
+            with cols[i]:
+                st.markdown(f"### {emoji}")
+                st.caption(emotion.capitalize())
     
     # Footer
     st.markdown("---")
     st.markdown(
-        "<div style='text-align: center; color: gray;'>"
-        "FER-2013 Facial Expression Recognition Model | Built with Streamlit"
+        "<div style='text-align: center; color: gray; padding: 1rem;'>"
+        "FER-2013 Facial Expression Recognition Model | Built with Streamlit & TensorFlow"
         "</div>",
         unsafe_allow_html=True
     )
